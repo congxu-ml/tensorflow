@@ -18,9 +18,9 @@ limitations under the License.
 #include "tensorflow/core/util/mkl_util.h"
 #include "tensorflow/core/graph/mkl_tfconversion_pass.h"
 
-#include <vector>
-#include <string>
 #include <algorithm>
+#include <string>
+#include <vector>
 
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/tensor.h"
