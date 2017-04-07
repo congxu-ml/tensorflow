@@ -260,14 +260,13 @@ static size_t kNodeMergeContextMaxDepth = 10;
 class MklLayoutRewritePass : public GraphOptimizationPass {
  public:
   MklLayoutRewritePass() {
-    csinfo_.conv2d            = "Conv2D";
-    csinfo_.mklconv2d         = "MklConv2D";
+    csinfo_.conv2d = "Conv2D";
+    csinfo_.mklconv2d = "MklConv2D";
     csinfo_.mklconv2dwithbias = "MklConv2DWithBias";
     csinfo_.mklconv2dwithbiasbackpropbias = "MklConv2DWithBiasBackpropBias";
     csinfo_.biasadd           = "BiasAdd";
     csinfo_.matmul            = "MatMul";
     csinfo_.biasaddgrad       = "BiasAddGrad";
-
     csinfo_.concat            = "Concat";
     csinfo_.concatv2          = "ConcatV2";
     csinfo_.split             = "Split";
@@ -732,7 +731,6 @@ static void FillInputs(const Node* n,
   }
 }
 
-#if 0
 // TODO(nhasabni): although, we are not using it right now. We can implement
 // it for sake of completion.
 int MklLayoutRewritePass::SetUpInputsInterleaved(std::unique_ptr<Graph>* g,
