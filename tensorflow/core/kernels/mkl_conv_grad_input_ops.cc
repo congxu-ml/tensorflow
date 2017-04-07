@@ -23,6 +23,8 @@ limitations under the License.
 #define EIGEN_USE_THREADS
 #include <algorithm>
 #include <vector>
+#include "third_party/mkl/include/mkl_dnn.h"
+#include "third_party/mkl/include/mkl_dnn_types.h"
 #include "tensorflow/core/framework/numeric_op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/register_types.h"
@@ -40,8 +42,6 @@ limitations under the License.
 #include "tensorflow/core/util/tensor_format.h"
 #include "tensorflow/core/util/use_cudnn.h"
 #include "tensorflow/core/util/work_sharder.h"
-#include "third_party/mkl/include/mkl_dnn.h"
-#include "third_party/mkl/include/mkl_dnn_types.h"
 
 namespace tensorflow {
 
@@ -202,7 +202,7 @@ class MklConv2DCustomBackpropInputOp : public OpKernel {
     mkl_out_shape.AddDim(dnnLayoutGetMemorySize_F32(static_cast<dnnLayout_t>(
                              mklOutputShape.GetMklLayout())) /
                          sizeof(T));
-    AllocateOutputSetMklshape(context, 0, &in_backprop, mkl_out_shape,
+    AllocateOutputSetMklShape(context, 0, &in_backprop, mkl_out_shape,
                               mklOutputShape);
 
     mkl_context.conv_res[dnnResourceDiffSrc] =

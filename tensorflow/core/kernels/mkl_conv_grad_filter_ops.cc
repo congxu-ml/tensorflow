@@ -37,9 +37,9 @@ limitations under the License.
 #include "tensorflow/core/util/use_cudnn.h"
 #include "tensorflow/core/util/work_sharder.h"
 
-#include "tensorflow/core/util/mkl_util.h"
 #include "third_party/mkl/include/mkl_dnn.h"
 #include "third_party/mkl/include/mkl_dnn_types.h"
+#include "tensorflow/core/util/mkl_util.h"
 
 namespace tensorflow {
 
@@ -217,7 +217,7 @@ class MklConv2DCustomBackpropFilterOp : public OpKernel {
     mkl_context.grad_filter_shape.SetTfLayout(mkl_context.filter_dims,
                                               mkl_context.filter_sizes,
                                               mkl_context.filter_strides);
-    AllocateOutputSetMklshape(context, 0, &grad_filter, filter_shape,
+    AllocateOutputSetMklShape(context, 0, &grad_filter, filter_shape,
                               mkl_context.grad_filter_shape);
 
     // Need to set member variable for TF layout
