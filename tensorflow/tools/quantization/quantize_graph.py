@@ -656,11 +656,18 @@ class GraphRewriter(object):
   def add_eightbit_prologue_nodes(self, original_node):
     """Adds input conversion nodes to handle quantizing the underlying node."""
     namespace_prefix = original_node.name + "_eightbit"
+    
+    # Use the name of the first input as the control input name 
+    # for reshape_dim and reduction_dim to slove the different frame issue
+    # in quantized graph
     reshape_dims_name, reduction_dims_name = self.add_common_quantization_nodes(
-        namespace_prefix)
+        namespace_prefix, node_name_from_input(original_node.input[0]))
     input_names = []
     min_max_names = []
     for original_input_name in original_node.input:
+      # Do not quantize control input
+      if original_input_name.startswith("^"):
+        continue
       quantize_input_name, min_input_name, max_input_name = (
           self.eightbitize_input_to_node(namespace_prefix, original_input_name,
                                          reshape_dims_name,
@@ -671,18 +678,26 @@ class GraphRewriter(object):
     all_input_names = []
     all_input_names.extend(input_names)
     all_input_names.extend(min_max_names)
+
+    # add back control input name
+    for original_input_name in original_node.input:
+      if original_input_name.startswith("^"):
+        all_input_names.append(original_input_name)
+
     return all_input_names
 
-  def add_common_quantization_nodes(self, namespace_prefix):
+  def add_common_quantization_nodes(self, namespace_prefix, control_input_name):
     """Builds constant nodes needed for quantization of inputs."""
     reshape_dims_name = namespace_prefix + "_reshape_dims"
     reduction_dims_name = namespace_prefix + "_reduction_dims"
 
     reshape_dims_node = create_constant_node(reshape_dims_name, -1,
                                              dtypes.int32, [1])
+    reshape_dims_node.input.append("^" + control_input_name)
     self.add_output_graph_node(reshape_dims_node)
     reduction_dims_node = create_constant_node(reduction_dims_name, 0,
                                                dtypes.int32, [1])
+    reduction_dims_node.input.append("^" + control_input_name)
     self.add_output_graph_node(reduction_dims_node)
     return reshape_dims_name, reduction_dims_name
 
@@ -940,7 +955,7 @@ class GraphRewriter(object):
     namespace_prefix = original_node.name + "_eightbit"
     quantized_concat_name = namespace_prefix + "_quantized_concat"
     reshape_dims_name, reduction_dims_name = self.add_common_quantization_nodes(
-        namespace_prefix)
+        namespace_prefix, node_name_from_input(original_node.input[1]))
     shape_input_name = original_node.input[0]
     original_inputs = original_node.input[1:]
     input_names = []
@@ -1005,7 +1020,7 @@ class GraphRewriter(object):
     namespace_prefix = original_node.name + "_eightbit"
     quantized_reshape_name = namespace_prefix + "_quantized_reshape"
     reshape_dims_name, reduction_dims_name = self.add_common_quantization_nodes(
-        namespace_prefix)
+        namespace_prefix, node_name_from_input(original_node.input[0]))
     shape_input_name = original_node.input[1]
     quantize_input_name, min_input_name, max_input_name = (
         self.eightbitize_input_to_node(namespace_prefix, original_node.input[0],
@@ -1028,7 +1043,7 @@ class GraphRewriter(object):
     quantized_batch_norm_name = namespace_prefix + "_quantized_batch_norm"
 
     reshape_dims_name, reduction_dims_name = self.add_common_quantization_nodes(
-        namespace_prefix)
+        namespace_prefix, node_name_from_input(original_input_name))
     quantize_input_name, min_input_name, max_input_name = (
         self.eightbitize_input_to_node(namespace_prefix, original_input_name,
                                        reshape_dims_name, reduction_dims_name))
