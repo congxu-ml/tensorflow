@@ -121,6 +121,12 @@ struct GatherNdSlice<CPUDevice, T, Index, IXDIM> {
 // needs to go through redundant operations like 'reshape', 'broadcast' and
 // 'sum'. OpenMP loop below essentially does same thing as Eigen code, but
 // is considerably more efficient.
+  if(DisableMKL()) {
+    Tscratch.device(d) = Tscratch.reshape(reshape_dims)
+                             .broadcast(broadcast_dims)
+                             .generate(gather_nd_generator)
+                             .sum();
+  }
 #pragma omp parallel for
     for (Eigen::DenseIndex i = 0; i < batch_size; i++) {
       const Eigen::array<Eigen::DenseIndex, 1> loc{i};

@@ -39,6 +39,8 @@ limitations under the License.
 #include "tensorflow/core/kernels/fill_functor.h"
 #include "tensorflow/core/platform/logging.h"
 #include "tensorflow/core/platform/types.h"
+#include "tensorflow/core/kernels/batch_matmul_op_impl.h"
+#include "tensorflow/core/util/util.h"
 
 namespace tensorflow {
 
@@ -50,90 +52,101 @@ class BatchMatMulMkl : public OpKernel {
   explicit BatchMatMulMkl(OpKernelConstruction *context) : OpKernel(context) {
     OP_REQUIRES_OK(context, context->GetAttr("adj_x", &adj_x_));
     OP_REQUIRES_OK(context, context->GetAttr("adj_y", &adj_y_));
+    if (DisableMKL())  // eigen path if MKL is disabled
+      _op = new BatchMatMul<Device, Scalar>(context);
+
   }
 
-  virtual ~BatchMatMulMkl() {}
+  virtual ~BatchMatMulMkl() {
+    if (DisableMKL())  // eigen path if MKL is disabled
+      delete _op;
+  }
 
   void Compute(OpKernelContext *ctx) override {
-    const Tensor &lhs = ctx->input(0);
-    const Tensor &rhs = ctx->input(1);
-    OP_REQUIRES(ctx, lhs.dims() == rhs.dims(),
-                errors::InvalidArgument("lhs and rhs has different ndims: ",
-                                        lhs.shape().DebugString(), " vs. ",
-                                        rhs.shape().DebugString()));
-    const int ndims = lhs.dims();
-    OP_REQUIRES(
-        ctx, ndims >= 2,
-        errors::InvalidArgument("lhs and rhs ndims must be >= 2: ", ndims));
-    TensorShape out_shape;
-    for (int i = 0; i < ndims - 2; ++i) {
-      OP_REQUIRES(ctx, lhs.dim_size(i) == rhs.dim_size(i),
+    if (DisableMKL()) {         // eigen path if MKL is disabled
+        _op->Compute(ctx);
+    } else {
+      const Tensor &lhs = ctx->input(0);
+      const Tensor &rhs = ctx->input(1);
+      OP_REQUIRES(ctx, lhs.dims() == rhs.dims(),
+                  errors::InvalidArgument("lhs and rhs has different ndims: ",
+                                          lhs.shape().DebugString(), " vs. ",
+                                          rhs.shape().DebugString()));
+      const int ndims = lhs.dims();
+      OP_REQUIRES(
+          ctx, ndims >= 2,
+          errors::InvalidArgument("lhs and rhs ndims must be >= 2: ", ndims));
+      TensorShape out_shape;
+      for (int i = 0; i < ndims - 2; ++i) {
+        OP_REQUIRES(ctx, lhs.dim_size(i) == rhs.dim_size(i),
+                    errors::InvalidArgument(
+                        "lhs.dim(", i, ") and rhs.dim(", i,
+                        ") must be the same: ", lhs.shape().DebugString(), " vs ",
+                        rhs.shape().DebugString()));
+        out_shape.AddDim(lhs.dim_size(i));
+      }
+      auto batch_size = (ndims == 2) ? 1 : out_shape.num_elements();
+      auto lhs_rows = lhs.dim_size(ndims - 2);
+      auto lhs_cols = lhs.dim_size(ndims - 1);
+      auto rhs_rows = rhs.dim_size(ndims - 2);
+      auto rhs_cols = rhs.dim_size(ndims - 1);
+      if (adj_x_) std::swap(lhs_rows, lhs_cols);
+      if (adj_y_) std::swap(rhs_rows, rhs_cols);
+      OP_REQUIRES(ctx, lhs_cols == rhs_rows,
                   errors::InvalidArgument(
-                      "lhs.dim(", i, ") and rhs.dim(", i,
-                      ") must be the same: ", lhs.shape().DebugString(), " vs ",
-                      rhs.shape().DebugString()));
-      out_shape.AddDim(lhs.dim_size(i));
-    }
-    auto batch_size = (ndims == 2) ? 1 : out_shape.num_elements();
-    auto lhs_rows = lhs.dim_size(ndims - 2);
-    auto lhs_cols = lhs.dim_size(ndims - 1);
-    auto rhs_rows = rhs.dim_size(ndims - 2);
-    auto rhs_cols = rhs.dim_size(ndims - 1);
-    if (adj_x_) std::swap(lhs_rows, lhs_cols);
-    if (adj_y_) std::swap(rhs_rows, rhs_cols);
-    OP_REQUIRES(ctx, lhs_cols == rhs_rows,
-                errors::InvalidArgument(
-                    "lhs mismatch rhs shape: ", lhs_cols, " vs. ", rhs_rows,
-                    ": ", lhs.shape().DebugString(), " ",
-                    rhs.shape().DebugString(), " ", adj_x_, " ", adj_y_));
-    out_shape.AddDim(lhs_rows);
-    out_shape.AddDim(rhs_cols);
-    Tensor *out = nullptr;
-    OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &out));
-    if (out->NumElements() == 0) {
-      return;
-    }
-    if (lhs.NumElements() == 0 || rhs.NumElements() == 0) {
-      functor::SetZeroFunctor<Device, Scalar> f;
-      f(ctx->eigen_device<Device>(), out->flat<Scalar>());
-      return;
-    }
+                      "lhs mismatch rhs shape: ", lhs_cols, " vs. ", rhs_rows,
+                      ": ", lhs.shape().DebugString(), " ",
+                      rhs.shape().DebugString(), " ", adj_x_, " ", adj_y_));
+      out_shape.AddDim(lhs_rows);
+      out_shape.AddDim(rhs_cols);
+      Tensor *out = nullptr;
+      OP_REQUIRES_OK(ctx, ctx->allocate_output(0, out_shape, &out));
+      if (out->NumElements() == 0) {
+        return;
+      }
+      if (lhs.NumElements() == 0 || rhs.NumElements() == 0) {
+        functor::SetZeroFunctor<Device, Scalar> f;
+        f(ctx->eigen_device<Device>(), out->flat<Scalar>());
+        return;
+      }
 
-    auto rhs_reshaped = rhs.template flat_inner_dims<Scalar, 3>();
-    auto lhs_reshaped = lhs.template flat_inner_dims<Scalar, 3>();
-    auto out_reshaped = out->template flat_inner_dims<Scalar, 3>();
-    const uint64 M = lhs_reshaped.dimension(adj_x_ ? 2 : 1);
-    const uint64 K = lhs_reshaped.dimension(adj_x_ ? 1 : 2);
-    const uint64 N = rhs_reshaped.dimension(adj_y_ ? 1 : 2);
+      auto rhs_reshaped = rhs.template flat_inner_dims<Scalar, 3>();
+      auto lhs_reshaped = lhs.template flat_inner_dims<Scalar, 3>();
+      auto out_reshaped = out->template flat_inner_dims<Scalar, 3>();
+      const uint64 M = lhs_reshaped.dimension(adj_x_ ? 2 : 1);
+      const uint64 K = lhs_reshaped.dimension(adj_x_ ? 1 : 2);
+      const uint64 N = rhs_reshaped.dimension(adj_y_ ? 1 : 2);
 
-    std::vector<MKL_INT> m_array(batch_size, M);
-    std::vector<MKL_INT> n_array(batch_size, N);
-    std::vector<MKL_INT> k_array(batch_size, K);
-    std::vector<MKL_INT> lda_array(batch_size, adj_x_ ? M : K);
-    std::vector<MKL_INT> ldb_array(batch_size, adj_y_ ? K : N);
-    std::vector<MKL_INT> ldc_array(batch_size, N);
-    std::vector<MKL_INT> group_size(1, batch_size);
-    std::vector<const Scalar *> a_array;
-    std::vector<const Scalar *> b_array;
-    std::vector<Scalar *> c_array;
-    a_array.reserve(batch_size);
-    b_array.reserve(batch_size);
-    c_array.reserve(batch_size);
-    for (int64 i = 0; i < batch_size; i++) {
-      a_array.push_back(&lhs_reshaped(i, 0, 0));
-      b_array.push_back(&rhs_reshaped(i, 0, 0));
-      c_array.push_back(&out_reshaped(i, 0, 0));
+      std::vector<MKL_INT> m_array(batch_size, M);
+      std::vector<MKL_INT> n_array(batch_size, N);
+      std::vector<MKL_INT> k_array(batch_size, K);
+      std::vector<MKL_INT> lda_array(batch_size, adj_x_ ? M : K);
+      std::vector<MKL_INT> ldb_array(batch_size, adj_y_ ? K : N);
+      std::vector<MKL_INT> ldc_array(batch_size, N);
+      std::vector<MKL_INT> group_size(1, batch_size);
+      std::vector<const Scalar *> a_array;
+      std::vector<const Scalar *> b_array;
+      std::vector<Scalar *> c_array;
+      a_array.reserve(batch_size);
+      b_array.reserve(batch_size);
+      c_array.reserve(batch_size);
+      for (int64 i = 0; i < batch_size; i++) {
+        a_array.push_back(&lhs_reshaped(i, 0, 0));
+        b_array.push_back(&rhs_reshaped(i, 0, 0));
+        c_array.push_back(&out_reshaped(i, 0, 0));
+      }
+
+      MklCblasGemmBatch(CblasRowMajor, adj_x_, adj_y_, &m_array[0], &n_array[0],
+                        &k_array[0], &a_array[0], &lda_array[0], &b_array[0],
+                        &ldb_array[0], &c_array[0], &ldc_array[0], 1,
+                        &group_size[0]);
     }
-
-    MklCblasGemmBatch(CblasRowMajor, adj_x_, adj_y_, &m_array[0], &n_array[0],
-                      &k_array[0], &a_array[0], &lda_array[0], &b_array[0],
-                      &ldb_array[0], &c_array[0], &ldc_array[0], 1,
-                      &group_size[0]);
   }
 
  private:
   bool adj_x_;
   bool adj_y_;
+  BatchMatMul<Device, Scalar> *_op;
 
   void MklCblasGemmBatch(const CBLAS_LAYOUT Layout, const bool TransA,
                          const bool TransB, const MKL_INT *M_Array,
